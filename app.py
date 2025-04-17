@@ -7,23 +7,30 @@ import timm
 import matplotlib.pyplot as plt
 import numpy as np
 import captum.attr as attr
+import os
+
+# Device setup
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+CLASS_NAMES = ['Aphids_Disease', 'Blotch', 'Healthy_Leaf', 'Leaf_Spot']
 
 # Load Model
 @st.cache_resource
 def load_model():
-    model = timm.create_model('mobilevitv2_200', pretrained=False, num_classes=1000)
-    model.load_state_dict(torch.load("model.h5", map_location=torch.device('cpu')))
+    model = timm.create_model('mobilevitv2_200', pretrained=True, num_classes=len(CLASS_NAMES))
+    model.load_state_dict(torch.load('turmeric_mobilevitv2_200.pth', map_location=device))
+    model.to(device)
     model.eval()
     return model
 
 model = load_model()
 
-def apply_gradcam(model, image_tensor):
-    grad_cam = attr.LayerGradCam(model, model.conv_stem)
-    attributions = grad_cam.attribute(image_tensor, target=0)
-    return attributions.squeeze().cpu().numpy()
 
-# Define transformations
+def apply_gradcam(model, image_tensor):
+    grad_cam = attr.LayerGradCam(model, model.conv_stem) 
+    attributions = grad_cam.attribute(image_tensor, target=0)
+    return attributions.squeeze().cpu().detach().numpy()
+
+# Image Transform
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -31,45 +38,31 @@ transform = transforms.Compose([
 ])
 
 # Streamlit UI
-st.title("MobileViTv2 Image Classifier with XAI")
-st.write("Upload an image to classify using MobileViTv2 with explainability (Grad-CAM).")
+st.title("Turmeric MobileViTv2 Image Classifier with Grad-CAM")
+st.write("Upload an image to classify with MobileViTv2 and explain predictions using Grad-CAM.")
 
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])
 
 if uploaded_file is not None:
-    image = Image.open(uploaded_file)
+    image = Image.open(uploaded_file).convert('RGB')
     st.image(image, caption="Uploaded Image", use_column_width=True)
     
-    # Preprocess image
-    input_tensor = transform(image).unsqueeze(0)
-    
-    # Make prediction
+    input_tensor = transform(image).unsqueeze(0).to(device)
+
+    # Prediction
     with torch.no_grad():
         output = model(input_tensor)
-        _, predicted_class = torch.max(output, 1)
+        _, pred_class = torch.max(output, 1)
+        class_name = CLASS_NAMES[pred_class.item()]
     
-    st.write(f"Predicted Class: {predicted_class.item()}")
+    st.write(f"Predicted Class: **{class_name}**")
     
-    # Apply Grad-CAM
+    # Grad-CAM
     cam_attributions = apply_gradcam(model, input_tensor)
     
     plt.figure(figsize=(6, 6))
+    plt.imshow(image)
     plt.imshow(cam_attributions, cmap='jet', alpha=0.5)
-    plt.colorbar()
-    plt.title("Grad-CAM Explanation")
-    st.pyplot(plt)
-
-# Plot training and validation loss
-if st.button("Show Training Loss Curve"):
-    train_losses = np.random.rand(50)  # Placeholder values
-    val_losses = np.random.rand(50)  # Placeholder values
-    
-    plt.figure(figsize=(10, 5))
-    plt.plot(range(1, 51), train_losses, label='Training Loss')
-    plt.plot(range(1, 51), val_losses, label='Validation Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.title('Training and Validation Loss Curves')
-    plt.legend()
-    plt.grid(True)
+    plt.axis('off')
+    plt.title("Grad-CAM Heatmap")
     st.pyplot(plt)
